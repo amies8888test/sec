@@ -1,0 +1,161 @@
+0x01. In your user guide, you said that query bind is very safety
+
+The secondary benefit of using binds is that the values are automatically escaped, producing safer queries. You don’t have to remember to manually escape data; the engine does it automatically for you.
+
+0x02.We need to know how query function work
+
+function query($sql, $binds = FALSE, $return_object = TRUE)
+{
+if ($sql == '')
+{
+if ($this->db_debug)
+{
+log_message('error', 'Invalid query: '.$sql);
+return $this->display_error('db_invalid_query');
+}
+return FALSE;
+}
+
+    // Verify table prefix and replace if necessary
+    if ( ($this->dbprefix != '' AND $this->swap_pre != '') AND ($this->dbprefix != $this->swap_pre) )
+    {
+        $sql = preg_replace("/(\W)".$this->swap_pre."(\S+?)/", "\\1".$this->dbprefix."\\2", $sql);
+    }
+
+    // Compile binds if needed
+    if ($binds !== FALSE)
+    {
+        $sql = $this->compile_binds($sql, $binds);//这里进行sql语句的拼接
+    }
+    //echo $sql;exit();
+    // Is query caching enabled?  If the query is a "read type"
+    // we will load the caching class and return the previously
+    // cached query if it exists
+    if ($this->cache_on == TRUE AND stristr($sql, 'SELECT'))
+    {
+        if ($this->_cache_init())
+        {
+            $this->load_rdriver();
+            if (FALSE !== ($cache = $this->CACHE->read($sql)))
+            {
+                return $cache;
+            }
+        }
+    }
+
+Go on to the define of compile_binds
+
+function compile_binds($sql, $binds)
+{
+if (strpos($sql, $this->bind_marker) === FALSE)
+{
+return $sql;
+}
+
+    if ( ! is_array($binds))
+    {
+        $binds = array($binds);
+    }
+
+    // Get the sql segments around the bind markers
+    $segments = explode($this->bind_marker, $sql);
+
+    // The count of bind should be 1 less then the count of segments
+    // If there are more bind arguments trim it down
+    if (count($binds) >= count($segments)) {
+        $binds = array_slice($binds, 0, count($segments)-1);
+    }
+
+    // Construct the binded query
+    $result = $segments[0];
+    $i = 0;
+    foreach ($binds as $bind)
+    {
+        $result .= $this->escape($bind);//这里对传入的参数进行过滤
+        $result .= $segments[++$i];
+    }
+
+    return $result;
+}
+
+Go on to the define of escape
+
+public function escape($str)
+{
+    if (is_array($str))
+    {
+        $str = array_map(array(&$this, 'escape'), $str);
+        return $str;
+    }
+    elseif (is_string($str) OR (is_object($str) && method_exists($str, '__toString')))
+    {
+        return "'".$this->escape_str($str)."'";
+    }
+    elseif (is_bool($str))
+    {
+        return ($str === FALSE) ? 0 : 1;
+    }
+    elseif ($str === NULL)
+    {
+        return 'NULL';
+    }
+
+    return $str;
+}
+
+​.......
+
+0x03. At all, wo find the function escape_str is the finally escape function. CI provides many kinds of databases escape functions such as mysql,mssql,odbc and so on.
+most kinds of escape functions works well except odbc
+protected function _escape_str($str)
+{
+return removeinvisible_characters($str);
+}
+and the function remove_invisible_characters
+function remove_invisible_characters($str, $url_encoded = TRUE)
+{
+$non_displayables = array();
+
+    // every control character except newline (dec 10),
+    // carriage return (dec 13) and horizontal tab (dec 09)
+    if ($url_encoded)
+    {
+        $non_displayables[] = '/%0[0-8bcef]/';    // url encoded 00-08, 11, 12, 14, 15
+        $non_displayables[] = '/%1[0-9a-f]/';    // url encoded 16-31
+    }
+
+    $non_displayables[] = '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]+/S';    // 00-08, 11, 12, 14-31, 127
+
+    do
+    {
+        $str = preg_replace($non_displayables, '', $str, -1, $count);
+    }
+    while ($count);
+
+    return $str;
+}
+
+there is no escape operation any more
+
+0x04. So, if one use odbc to connect database ,the operation will become very unsafe, for example
+
+public function odbc_test()
+{
+$sql = "select * from [test].[dbo].[user] where username=? and password=?";
+$query = $this->db->query($sql, array($POST['username'], $_POST['password']));
+$result = $query->result_array();
+foreach($result as $value){
+vardump($value);
+}
+}
+
+We have the username admin ,but we submit is admin' or 1=1 -- a
+
+0x05 What's more, another usage of CI also has problem
+
+$query = $this->db->where(array('username'=>$POST['username'],'password'=>$_POST['password']))->from('[test].[dbo].[user]')->get();
+$result = $query->resultarray();
+foreach($result as $value){
+var_dump($value);
+}
+}
